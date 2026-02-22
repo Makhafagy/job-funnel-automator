@@ -94,6 +94,7 @@ Create a new Google Sheet and copy its Spreadsheet ID.
 4. Run `setupSheets()` once.
 5. Run `syncJobEmails()` once to authorize Gmail + Sheets permissions.
 6. Add a time-driven trigger for `syncJobEmails()` (hourly recommended).
+7. For first-time backfill, run `syncJobEmails()` manually a few times until pending labeled messages are drained.
 
 ### 3) Gmail labels
 
@@ -103,6 +104,34 @@ Create two labels:
 - `jobs/applications/processed`
 
 Route relevant inbound messages into `jobs/applications/inbox` using Gmail filters.
+
+### 3.1) Recommended Gmail filter (stable baseline)
+
+Use Gmail advanced search to create one filter with:
+
+- Action:
+  - `Apply label` -> `jobs/applications/inbox`
+  - `Never send it to Spam`
+
+- Has the words:
+
+```text
+("thank you for applying" OR "application received" OR "application submitted" OR "update on your application" OR "next steps" OR "phone screen" OR "technical screen" OR "online assessment" OR "coding assessment" OR "take-home" OR "take home" OR "interview" OR "job offer" OR "offer letter" OR "not moving forward" OR rejection)
+OR from:(greenhouse.io OR lever.co OR myworkday.com OR workday.com OR ashbyhq.com OR smartrecruiters.com OR icims.com OR jobvite.com OR taleo.net OR hirevue.com OR codesignal.com OR hackerrank.com OR jobdiva.com)
+```
+
+- Doesn't have:
+
+```text
+from:(paypal.com OR disneydebit.com OR chase.com OR capitalone.com OR wellsfargo.com OR bankofamerica.com OR citi.com OR discover.com OR americanexpress.com OR linkedin.com OR otp.workday.com OR statefarm.com)
+OR subject:("job alert" OR "daily job alert" OR "weekly job alert" OR "jobs you may be interested in" OR "reset your password" OR "password reset" OR otp OR "security code" OR "verify your email" OR "account verification" OR newsletter OR "virtual recruiter" OR "now on mobile" OR "current openings" OR "get the app")
+```
+
+Notes:
+
+- Keep this query in `Has the words`/`Doesn't have` filter fields instead of only raw search bar strings for better maintainability.
+- `subject:` only checks subject line; plain quoted phrases in `Has the words` can match body text too.
+- Review false positives weekly and append exclusions (`-from:domain.com` or `-subject:"phrase"`).
 
 ### 4) Simplify CSV pipeline
 
@@ -125,11 +154,47 @@ Then import the normalized CSV through:
 - Daily: run `rebuildMetrics()`.
 - Weekly: run `buildFollowUpQueue(daysWithoutTouch, maxItems)` and process the queue.
 
+Quick operational checks:
+
+1. Pending items (not yet processed):
+
+```text
+label:"jobs/applications/inbox" -label:"jobs/applications/processed"
+```
+
+2. Recent labeled traffic:
+
+```text
+label:"jobs/applications/inbox" newer_than:2d
+```
+
 ## Security and privacy notes
 
 - Do not store credentials in repo code.
 - Use Script Properties for IDs/config.
 - Keep this project private if your sheet includes personal contact details.
+
+## Known limitations
+
+- Heuristic parsing can leave `company` or `role` as `Unknown` for noisy templates.
+- Broad keywords (for example "offer" or "recruiter") can cause false positives if filter exclusions are too weak.
+- This pipeline does not capture non-email applications unless you import CSV/manual rows.
+
+## Troubleshooting
+
+1. `syncJobEmails` runs but no rows are appended:
+   - Confirm script properties are set (`SPREADSHEET_ID`, `SOURCE_LABEL`, `PROCESSED_LABEL`, `SEARCH_LIMIT`).
+   - Confirm pending Gmail results exist:
+     - `label:"jobs/applications/inbox" -label:"jobs/applications/processed"`
+
+2. Gmail filter appears to miss expected messages:
+   - If phrase is only in body, do not wrap it with `subject:`.
+   - Validate in search first with:
+     - `in:anywhere "thank you for applying" newer_than:7d`
+
+3. Data quality is noisy:
+   - Tighten `Doesn't have` exclusions.
+   - Run weekly cleanup by removing label from obvious non-job threads.
 
 ## Repo structure
 
