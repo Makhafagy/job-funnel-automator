@@ -19,12 +19,45 @@ Applying to jobs across multiple platforms creates fragmented tracking data and 
 - Rebuild stage metrics in a `Metrics` sheet
 - Generate a follow-up queue based on oldest untouched applications
 
-## Architecture
+## System Architecture
 
-1. Gmail labels route inbound job communications (e.g., confirmations, interviews, rejections).
-2. `apps-script/Code.gs` reads unprocessed threads, parses signals, and appends rows to `Applications`.
-3. Simplify CSV exports are normalized with `scripts/normalize_simplify_export.py` and imported.
-4. A `Metrics` sheet is rebuilt on demand to show conversion rates and funnel health.
+```mermaid
+flowchart LR
+    A["Gmail Label<br/>jobs/applications/inbox"] --> B["Apps Script<br/>syncJobEmails()"]
+    B --> C["Google Sheet<br/>Applications"]
+
+    D["Simplify Export CSV"] --> E["Python Normalizer<br/>normalize_simplify_export.py"]
+    E --> F["Apps Script Import<br/>importSimplifyCsvFromDrive()"]
+    F --> C
+
+    C --> G["Metrics Builder<br/>rebuildMetrics()"]
+    C --> H["Follow-Up Queue Builder<br/>buildFollowUpQueue()"]
+    G --> I["Metrics Sheet"]
+    H --> J["FollowUpQueue Sheet"]
+```
+
+Pipeline summary:
+
+1. Gmail labels route inbound job communications (confirmations, interviews, rejections).
+2. `apps-script/Code.gs` parses each message and appends structured rows into `Applications`.
+3. Simplify CSV exports are normalized with `scripts/normalize_simplify_export.py` and imported in batch.
+4. Metrics and follow-up queues are rebuilt from a single source of truth.
+
+## Screenshots
+
+### Applications Pipeline View
+
+![Applications Pipeline](assets/screenshots/applications-pipeline.svg)
+
+### Metrics Snapshot
+
+![Metrics Snapshot](assets/screenshots/metrics-snapshot.svg)
+
+### Follow-Up Queue
+
+![Follow-Up Queue](assets/screenshots/follow-up-queue.svg)
+
+Replace these placeholder images with real screenshots from your Google Sheet once your automation is running live.
 
 ## Data model (`Applications` sheet)
 
@@ -104,6 +137,7 @@ Then import the normalized CSV through:
 - `apps-script/appsscript.json` - Apps Script manifest
 - `scripts/normalize_simplify_export.py` - Simplify CSV normalizer
 - `examples/simplify_export_sample.csv` - sample input schema
+- `assets/screenshots/` - README gallery images (replace with real screenshots)
 
 ## Resume/project showcase angle
 
@@ -113,4 +147,3 @@ This project demonstrates:
 - Data normalization across heterogeneous sources
 - Lightweight ETL design and dedupe strategy
 - Funnel analytics for operational decision-making
-

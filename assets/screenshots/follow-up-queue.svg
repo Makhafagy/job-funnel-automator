@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Follow-up queue placeholder">
+  <rect width="1200" height="630" fill="#111827" />
+  <rect x="40" y="40" width="1120" height="550" rx="18" fill="#0f172a" stroke="#334155" />
+  <text x="80" y="120" fill="#e5e7eb" font-family="Arial, Helvetica, sans-serif" font-size="44" font-weight="700">Follow-Up Queue</text>
+  <text x="80" y="180" fill="#94a3b8" font-family="Arial, Helvetica, sans-serif" font-size="24">Replace with a real screenshot from the FollowUpQueue sheet.</text>
+  <rect x="80" y="230" width="1040" height="290" rx="12" fill="#111827" stroke="#475569" />
+  <rect x="100" y="255" width="1000" height="36" fill="#1f2937" />
+  <text x="110" y="279" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="18">company | role | source | applied_date | days_since_apply | thread_url</text>
+  <text x="110" y="325" fill="#86efac" font-family="Arial, Helvetica, sans-serif" font-size="19">Acme Inc | Backend Engineer | Gmail | 2026-01-10 | 43 | mail.google.com/...</text>
+  <text x="110" y="360" fill="#fde68a" font-family="Arial, Helvetica, sans-serif" font-size="19">Globex | Software Engineer | Simplify | 2026-01-17 | 36 | ...</text>
+  <text x="110" y="395" fill="#fca5a5" font-family="Arial, Helvetica, sans-serif" font-size="19">Initech | Platform Engineer | Gmail | 2026-01-22 | 31 | ...</text>
+  <text x="80" y="565" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="18">assets/screenshots/follow-up-queue.svg</text>
+</svg>

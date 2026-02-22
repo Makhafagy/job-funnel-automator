@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Metrics snapshot placeholder">
+  <rect width="1200" height="630" fill="#0b1220" />
+  <rect x="40" y="40" width="1120" height="550" rx="18" fill="#0f172a" stroke="#334155" />
+  <text x="80" y="120" fill="#e2e8f0" font-family="Arial, Helvetica, sans-serif" font-size="44" font-weight="700">Metrics Snapshot</text>
+  <text x="80" y="180" fill="#94a3b8" font-family="Arial, Helvetica, sans-serif" font-size="24">Replace with a real screenshot from the Metrics sheet.</text>
+  <rect x="80" y="230" width="500" height="300" rx="12" fill="#111827" stroke="#475569" />
+  <rect x="620" y="230" width="500" height="300" rx="12" fill="#111827" stroke="#475569" />
+  <text x="105" y="275" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">stage_applied</text>
+  <text x="105" y="310" fill="#93c5fd" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">142</text>
+  <text x="105" y="360" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">stage_interview</text>
+  <text x="105" y="395" fill="#86efac" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">11</text>
+  <text x="645" y="275" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">source_gmail</text>
+  <text x="645" y="310" fill="#fde68a" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">98</text>
+  <text x="645" y="360" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">source_simplify</text>
+  <text x="645" y="395" fill="#fca5a5" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">44</text>
+  <text x="80" y="565" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="18">assets/screenshots/metrics-snapshot.svg</text>
+</svg>

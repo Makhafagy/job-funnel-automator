@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Applications pipeline placeholder">
+  <rect width="1200" height="630" fill="#0f172a" />
+  <rect x="40" y="40" width="1120" height="550" rx="18" fill="#111827" stroke="#334155" />
+  <text x="80" y="120" fill="#e5e7eb" font-family="Arial, Helvetica, sans-serif" font-size="44" font-weight="700">Applications Pipeline</text>
+  <text x="80" y="180" fill="#94a3b8" font-family="Arial, Helvetica, sans-serif" font-size="24">Replace with a real screenshot from the Applications sheet.</text>
+  <rect x="80" y="230" width="1040" height="290" rx="12" fill="#1f2937" stroke="#475569" stroke-dasharray="10 8" />
+  <text x="110" y="285" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">Suggested screenshot content:</text>
+  <text x="130" y="325" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">- Source, Company, Role, Stage columns</text>
+  <text x="130" y="360" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">- Most recent automated ingestions</text>
+  <text x="130" y="395" fill="#cbd5e1" font-family="Arial, Helvetica, sans-serif" font-size="20">- Example status progression</text>
+  <text x="80" y="565" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="18">assets/screenshots/applications-pipeline.svg</text>
+</svg>
