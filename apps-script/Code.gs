@@ -19,6 +19,7 @@ function onOpen() {
     .addItem('Setup Sheets', 'setupSheets')
     .addItem('Sync Job Emails', 'syncJobEmails')
     .addItem('Rebuild Metrics', 'rebuildMetrics')
+    .addItem('Build Dashboard', 'buildDashboard')
     .addItem('Build Follow-Up Queue', 'buildDefaultFollowUpQueue')
     .addToUi();
 }
@@ -45,6 +46,7 @@ function setupSheets() {
   const ss = getSpreadsheet_();
   ensureSheet_(ss, 'Applications', APP_COLUMNS);
   ensureSheet_(ss, 'Metrics', ['metric', 'value']);
+  ensureSheet_(ss, 'MetricsByYear', ['year', 'metric', 'value']);
   ensureSheet_(ss, 'FollowUpQueue', ['company', 'role', 'source', 'applied_date', 'days_since_apply', 'thread_url']);
 }
 
@@ -101,7 +103,13 @@ function syncJobEmails() {
       existingIds.add(parsed.externalId);
     });
 
-    thread.addLabel(processedLabel);
+    // Some threads (e.g., restricted/system conversations) may reject label operations.
+    // Continue sync instead of failing the full run.
+    try {
+      thread.addLabel(processedLabel);
+    } catch (error) {
+      Logger.log(`Could not add processed label to thread ${thread.getId()}: ${error}`);
+    }
   });
 
   if (rowsToAppend.length > 0) {
@@ -354,33 +362,150 @@ function normalizeDate_(value) {
   return sanitize_(value);
 }
 
+function normalizeMetricToken_(value) {
+  const token = sanitize_(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return token || 'unknown';
+}
+
+function extractYear_(value) {
+  const text = sanitize_(value);
+  if (!text) {
+    return '';
+  }
+
+  const yearMatch = text.match(/\b(19\d{2}|20\d{2})\b/);
+  if (yearMatch) {
+    return yearMatch[1];
+  }
+
+  const parsed = new Date(text);
+  if (!isNaN(parsed.getTime())) {
+    return String(parsed.getFullYear());
+  }
+
+  return '';
+}
+
+function inferYearBucket_(appliedDate, createdAtUtc) {
+  return extractYear_(appliedDate) || extractYear_(createdAtUtc) || 'unknown';
+}
+
+function extractMonth_(value) {
+  const text = sanitize_(value);
+  if (!text) {
+    return '';
+  }
+
+  const monthMatch = text.match(/\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])\b/);
+  if (monthMatch) {
+    return `${monthMatch[1]}-${monthMatch[2]}`;
+  }
+
+  const parsed = new Date(text);
+  if (!isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+
+  return '';
+}
+
+function inferMonthBucket_(appliedDate, createdAtUtc) {
+  return extractMonth_(appliedDate) || extractMonth_(createdAtUtc) || 'unknown';
+}
+
+function incrementMap_(map, key, amount) {
+  map.set(key, (map.get(key) || 0) + amount);
+}
+
+function incrementYearMetric_(bucketMap, year, metric, amount) {
+  if (!bucketMap.has(year)) {
+    bucketMap.set(year, new Map());
+  }
+  const yearMap = bucketMap.get(year);
+  yearMap.set(metric, (yearMap.get(metric) || 0) + amount);
+}
+
+function toTitleLabel_(token) {
+  return sanitize_(token)
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Unknown';
+}
+
+function sortMapByValueDesc_(map) {
+  return [...map.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function getOrCreateSheet_(ss, name) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  return sheet;
+}
+
 function rebuildMetrics() {
   const ss = getSpreadsheet_();
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
   const metricsSheet = ss.getSheetByName('Metrics');
+  const byYearSheet = ss.getSheetByName('MetricsByYear');
 
   const last = appSheet.getLastRow();
   const metrics = new Map();
+  const yearBuckets = new Map();
   metrics.set('total_rows', Math.max(0, last - 1));
 
   if (last > 1) {
-    const stages = appSheet.getRange(2, 5, last - 1, 1).getValues();
-    const sources = appSheet.getRange(2, 2, last - 1, 1).getValues();
+    const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
 
-    stages.forEach((row) => {
-      const stage = sanitize_(row[0]) || 'Unknown';
-      const key = `stage_${stage.toLowerCase()}`;
-      metrics.set(key, (metrics.get(key) || 0) + 1);
-    });
+    rows.forEach((row) => {
+      const createdAtUtc = sanitize_(row[0]);
+      const source = normalizeMetricToken_(row[1]);
+      const company = sanitize_(row[2]);
+      const role = sanitize_(row[3]);
+      const stage = normalizeMetricToken_(row[4]);
+      const appliedDate = sanitize_(row[6]);
+      const year = inferYearBucket_(appliedDate, createdAtUtc);
 
-    sources.forEach((row) => {
-      const src = sanitize_(row[0]) || 'Unknown';
-      const key = `source_${src.toLowerCase()}`;
-      metrics.set(key, (metrics.get(key) || 0) + 1);
+      incrementMap_(metrics, `stage_${stage}`, 1);
+      incrementMap_(metrics, `source_${source}`, 1);
+      incrementYearMetric_(yearBuckets, year, 'total_rows', 1);
+      incrementYearMetric_(yearBuckets, year, `stage_${stage}`, 1);
+      incrementYearMetric_(yearBuckets, year, `source_${source}`, 1);
+
+      if (!company || company.toLowerCase() === 'unknown') {
+        incrementMap_(metrics, 'unknown_company_rows', 1);
+        incrementYearMetric_(yearBuckets, year, 'unknown_company_rows', 1);
+      }
+
+      if (!role || role.toLowerCase() === 'unknown') {
+        incrementMap_(metrics, 'unknown_role_rows', 1);
+        incrementYearMetric_(yearBuckets, year, 'unknown_role_rows', 1);
+      }
     });
   }
+
+  const years = [...yearBuckets.keys()].sort();
+  years.forEach((year) => {
+    const values = yearBuckets.get(year);
+    values.forEach((value, metric) => {
+      metrics.set(`year_${year}_${metric}`, value);
+    });
+  });
+
+  const byYearOutput = [['year', 'metric', 'value']];
+  years.forEach((year) => {
+    const values = yearBuckets.get(year);
+    [...values.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach((entry) => byYearOutput.push([year, entry[0], entry[1]]));
+  });
 
   const output = [['metric', 'value']];
   [...metrics.entries()]
@@ -390,6 +515,128 @@ function rebuildMetrics() {
   metricsSheet.clear();
   metricsSheet.getRange(1, 1, output.length, 2).setValues(output);
   metricsSheet.setFrozenRows(1);
+
+  byYearSheet.clear();
+  byYearSheet.getRange(1, 1, byYearOutput.length, 3).setValues(byYearOutput);
+  byYearSheet.setFrozenRows(1);
+
+  buildDashboard();
+}
+
+function buildDashboard() {
+  const ss = getSpreadsheet_();
+  setupSheets();
+
+  const appSheet = ss.getSheetByName('Applications');
+  const dashboardSheet = getOrCreateSheet_(ss, 'Dashboard');
+  const dataSheet = getOrCreateSheet_(ss, 'DashboardData');
+
+  const last = appSheet.getLastRow();
+  dataSheet.clear();
+  dashboardSheet.clear();
+  dashboardSheet.getCharts().forEach((chart) => dashboardSheet.removeChart(chart));
+
+  dashboardSheet.getRange('A1').setValue('Job Funnel Dashboard').setFontWeight('bold').setFontSize(16);
+  dashboardSheet.getRange('A2').setValue(`Last rebuilt: ${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
+
+  if (last <= 1) {
+    dashboardSheet.getRange('A4').setValue('No application rows found. Run syncJobEmails first.');
+    dataSheet.getRange(1, 1).setValue('No data');
+    dataSheet.hideSheet();
+    return;
+  }
+
+  const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+  const stageTotals = new Map();
+  const sourceTotals = new Map();
+  const monthlyTotals = new Map();
+  const yearStage = new Map();
+
+  rows.forEach((row) => {
+    const createdAtUtc = sanitize_(row[0]);
+    const source = normalizeMetricToken_(row[1]);
+    const stage = normalizeMetricToken_(row[4]);
+    const appliedDate = sanitize_(row[6]);
+    const year = inferYearBucket_(appliedDate, createdAtUtc);
+    const month = inferMonthBucket_(appliedDate, createdAtUtc);
+
+    incrementMap_(stageTotals, stage, 1);
+    incrementMap_(sourceTotals, source, 1);
+    incrementMap_(monthlyTotals, month, 1);
+    incrementYearMetric_(yearStage, year, stage, 1);
+  });
+
+  const stageRows = [['stage', 'count']];
+  sortMapByValueDesc_(stageTotals).forEach((entry) => stageRows.push([toTitleLabel_(entry[0]), entry[1]]));
+
+  const sourceRows = [['source', 'count']];
+  sortMapByValueDesc_(sourceTotals).forEach((entry) => sourceRows.push([toTitleLabel_(entry[0]), entry[1]]));
+
+  const stages = [...stageTotals.keys()].sort();
+  const years = [...yearStage.keys()].sort();
+  const yearStageRows = [['year', ...stages.map((stage) => toTitleLabel_(stage))]];
+  years.forEach((year) => {
+    const values = yearStage.get(year) || new Map();
+    yearStageRows.push([year, ...stages.map((stage) => values.get(stage) || 0)]);
+  });
+
+  const monthRows = [['month', 'applications']];
+  [...monthlyTotals.entries()]
+    .filter((entry) => entry[0] !== 'unknown')
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .forEach((entry) => monthRows.push([entry[0], entry[1]]));
+
+  dataSheet.getRange(1, 1, stageRows.length, 2).setValues(stageRows);
+  dataSheet.getRange(1, 4, sourceRows.length, 2).setValues(sourceRows);
+  dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length).setValues(yearStageRows);
+  dataSheet.getRange(1, 12, monthRows.length, 2).setValues(monthRows);
+  dataSheet.getRange('A1:B1').setFontWeight('bold');
+  dataSheet.getRange('D1:E1').setFontWeight('bold');
+  dataSheet.getRange(1, 7, 1, yearStageRows[0].length).setFontWeight('bold');
+  dataSheet.getRange('L1:M1').setFontWeight('bold');
+
+  const stageChart = dashboardSheet
+    .newChart()
+    .setChartType(Charts.ChartType.PIE)
+    .addRange(dataSheet.getRange(1, 1, stageRows.length, 2))
+    .setPosition(4, 1, 0, 0)
+    .setOption('title', 'Stage Distribution')
+    .setOption('legend', { position: 'right' })
+    .build();
+  dashboardSheet.insertChart(stageChart);
+
+  const sourceChart = dashboardSheet
+    .newChart()
+    .setChartType(Charts.ChartType.PIE)
+    .addRange(dataSheet.getRange(1, 4, sourceRows.length, 2))
+    .setPosition(4, 8, 0, 0)
+    .setOption('title', 'Source Distribution')
+    .setOption('legend', { position: 'right' })
+    .build();
+  dashboardSheet.insertChart(sourceChart);
+
+  const yearStageChart = dashboardSheet
+    .newChart()
+    .setChartType(Charts.ChartType.COLUMN)
+    .addRange(dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length))
+    .setPosition(22, 1, 0, 0)
+    .setOption('title', 'Stage Trend by Year')
+    .setOption('isStacked', true)
+    .build();
+  dashboardSheet.insertChart(yearStageChart);
+
+  if (monthRows.length > 1) {
+    const monthChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.LINE)
+      .addRange(dataSheet.getRange(1, 12, monthRows.length, 2))
+      .setPosition(22, 8, 0, 0)
+      .setOption('title', 'Applications Over Time (Monthly)')
+      .build();
+    dashboardSheet.insertChart(monthChart);
+  }
+
+  dataSheet.hideSheet();
 }
 
 function buildDefaultFollowUpQueue() {

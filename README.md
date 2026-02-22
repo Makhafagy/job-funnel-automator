@@ -17,6 +17,8 @@ Applying to jobs across multiple platforms creates fragmented tracking data and 
 - Dedupe entries using message IDs and stable fallback keys
 - Import non-email applications from Simplify export CSVs
 - Rebuild stage metrics in a `Metrics` sheet
+- Break down metrics by year in `MetricsByYear` for easier auditing
+- Auto-generate a visual dashboard (`Dashboard`) with charts
 - Generate a follow-up queue based on oldest untouched applications
 
 ## System Architecture
@@ -31,8 +33,11 @@ flowchart LR
     F --> C
 
     C --> G["Metrics Builder<br/>rebuildMetrics()"]
+    G --> L["Dashboard Builder<br/>buildDashboard()"]
     C --> H["Follow-Up Queue Builder<br/>buildFollowUpQueue()"]
     G --> I["Metrics Sheet"]
+    G --> K["MetricsByYear Sheet"]
+    L --> M["Dashboard Sheet (Charts)"]
     H --> J["FollowUpQueue Sheet"]
 ```
 
@@ -52,6 +57,16 @@ Pipeline summary:
 ### Metrics Snapshot
 
 ![Metrics Snapshot](assets/screenshots/metrics-snapshot.svg)
+
+### Metrics By Year
+
+`MetricsByYear` stores rows in the form:
+
+- `year`
+- `metric`
+- `value`
+
+This makes it easy to audit stage inflation by year (for example `year_2025_stage_interview` vs `year_2026_stage_interview` in the flattened `Metrics` sheet, plus explicit yearly rows in `MetricsByYear`).
 
 ### Follow-Up Queue
 
@@ -95,6 +110,7 @@ Create a new Google Sheet and copy its Spreadsheet ID.
 5. Run `syncJobEmails()` once to authorize Gmail + Sheets permissions.
 6. Add a time-driven trigger for `syncJobEmails()` (hourly recommended).
 7. For first-time backfill, run `syncJobEmails()` manually a few times until pending labeled messages are drained.
+8. Run `buildDashboard()` once (or use the menu item `Job Funnel -> Build Dashboard`).
 
 ### 3) Gmail labels
 
@@ -152,6 +168,7 @@ Then import the normalized CSV through:
 
 - Hourly: Gmail trigger ingests new labeled emails.
 - Daily: run `rebuildMetrics()`.
+- Daily (optional): run `buildDashboard()` if you want a manual visual refresh. (`rebuildMetrics()` also rebuilds dashboard automatically.)
 - Weekly: run `buildFollowUpQueue(daysWithoutTouch, maxItems)` and process the queue.
 
 Quick operational checks:
@@ -179,6 +196,7 @@ label:"jobs/applications/inbox" newer_than:2d
 - Heuristic parsing can leave `company` or `role` as `Unknown` for noisy templates.
 - Broad keywords (for example "offer" or "recruiter") can cause false positives if filter exclusions are too weak.
 - This pipeline does not capture non-email applications unless you import CSV/manual rows.
+- Metrics are event-based (email updates), not a strict one-row-per-application model.
 
 ## Troubleshooting
 
