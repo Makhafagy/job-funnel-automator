@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# local data exports
+*.csv
+!examples/*.csv
+
+# editor
+.vscode/
+.idea/
