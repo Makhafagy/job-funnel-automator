@@ -784,19 +784,31 @@ function getOrCreateSheet_(ss, name) {
 }
 
 function chartTextStyle_() {
-  return { color: '#e8eaed', fontSize: 12 };
+  return { color: '#202124', fontSize: 12 };
 }
 
 function chartThemeOptions_(title) {
   return {
     title,
-    titleTextStyle: { color: '#e8eaed', fontSize: 18, bold: true },
+    titleTextStyle: { color: '#202124', fontSize: 18, bold: true },
     legend: { position: 'right', textStyle: chartTextStyle_() },
-    backgroundColor: { fill: '#111111' },
-    chartArea: { backgroundColor: '#111111', left: 70, top: 60, width: '70%', height: '65%' },
+    backgroundColor: '#ffffff',
+    chartArea: { backgroundColor: '#ffffff', left: 70, top: 60, width: '70%', height: '65%' },
     hAxis: { textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() },
     vAxis: { textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() }
   };
+}
+
+function chartPalette_(count) {
+  const palette = [
+    '#1a73e8', '#ea4335', '#fbbc04', '#34a853',
+    '#9334e6', '#00acc1', '#e37400', '#5f6368'
+  ];
+  const colors = [];
+  for (let i = 0; i < count; i += 1) {
+    colors.push(palette[i % palette.length]);
+  }
+  return colors;
 }
 
 function listMonthsForYear_(year) {
@@ -920,6 +932,8 @@ function buildDashboard() {
   const yearStage = new Map();
   const currentYearMonthly = new Map();
   const currentYear = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy');
+  dashboardSheet.getRange('A4').setValue(`Canonical rows used: ${rows.length}`);
+  dashboardSheet.getRange('A5').setValue(`Current year: ${currentYear}`);
 
   rows.forEach((row) => {
     const source = normalizeMetricToken_(row.source);
@@ -1012,6 +1026,7 @@ function buildDashboard() {
     .setOption('legend', chartThemeOptions_('Stage Distribution').legend)
     .setOption('backgroundColor', chartThemeOptions_('Stage Distribution').backgroundColor)
     .setOption('chartArea', chartThemeOptions_('Stage Distribution').chartArea)
+    .setOption('colors', chartPalette_(Math.max(1, stageRows[0].length - 1)))
     .build();
   dashboardSheet.insertChart(stageChart);
 
@@ -1026,6 +1041,7 @@ function buildDashboard() {
     .setOption('legend', chartThemeOptions_('Source Distribution').legend)
     .setOption('backgroundColor', chartThemeOptions_('Source Distribution').backgroundColor)
     .setOption('chartArea', chartThemeOptions_('Source Distribution').chartArea)
+    .setOption('colors', chartPalette_(Math.max(1, sourceRows[0].length - 1)))
     .build();
   dashboardSheet.insertChart(sourceChart);
 
@@ -1042,6 +1058,7 @@ function buildDashboard() {
     .setOption('chartArea', chartThemeOptions_('Yearly Stage Counts (Stacked)').chartArea)
     .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
     .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+    .setOption('colors', chartPalette_(Math.max(1, yearStageRows[0].length - 1)))
     .setOption('isStacked', true)
     .build();
   dashboardSheet.insertChart(yearStageChart);
@@ -1060,6 +1077,7 @@ function buildDashboard() {
       .setOption('chartArea', chartThemeOptions_('Applications Over Time (Monthly)').chartArea)
       .setOption('hAxis', { title: 'Month', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
       .setOption('vAxis', { title: 'Applications', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('colors', ['#1a73e8'])
       .build();
     dashboardSheet.insertChart(monthChart);
   }
@@ -1078,6 +1096,7 @@ function buildDashboard() {
       .setOption('chartArea', chartThemeOptions_('Interview vs Applied by Year').chartArea)
       .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
       .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('colors', ['#1a73e8', '#ea4335'])
       .build();
     dashboardSheet.insertChart(appliedInterviewChart);
   }
@@ -1096,6 +1115,7 @@ function buildDashboard() {
       .setOption('chartArea', chartThemeOptions_(`${currentYear} Monthly Funnel`).chartArea)
       .setOption('hAxis', { title: 'Month', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
       .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('colors', ['#1a73e8', '#fbbc04', '#34a853', '#ea4335', '#c5221f', '#5f6368', '#00acc1'])
       .setOption('isStacked', false)
       .build();
     dashboardSheet.insertChart(currentYearChart);
