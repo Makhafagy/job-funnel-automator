@@ -19,6 +19,7 @@ Applying to jobs across multiple platforms creates fragmented tracking data and 
 - Rebuild stage metrics in a `Metrics` sheet
 - Break down metrics by year in `MetricsByYear` for easier auditing
 - Auto-generate a visual dashboard (`Dashboard`) with charts
+- Normalize `Updated` into `Applied` by default; stale updates become `Ghosted`
 - Generate a follow-up queue based on oldest untouched applications
 
 ## System Architecture
@@ -68,6 +69,14 @@ Pipeline summary:
 
 This makes it easy to audit stage inflation by year (for example `year_2025_stage_interview` vs `year_2026_stage_interview` in the flattened `Metrics` sheet, plus explicit yearly rows in `MetricsByYear`).
 
+`Dashboard` includes these charts:
+
+- Stage Distribution
+- Source Distribution
+- Stage Trend by Year
+- Applications Over Time (Monthly)
+- Interview vs Applied by Year
+
 ### Follow-Up Queue
 
 ![Follow-Up Queue](assets/screenshots/follow-up-queue.svg)
@@ -106,6 +115,7 @@ Create a new Google Sheet and copy its Spreadsheet ID.
    - `SOURCE_LABEL` = `jobs/applications/inbox`
    - `PROCESSED_LABEL` = `jobs/applications/processed`
    - `SEARCH_LIMIT` = `150`
+   - `GHOSTED_DAYS` = `45` (optional; `Updated` older than this is counted as `Ghosted`)
 4. Run `setupSheets()` once.
 5. Run `syncJobEmails()` once to authorize Gmail + Sheets permissions.
 6. Add a time-driven trigger for `syncJobEmails()` (hourly recommended).
@@ -201,7 +211,7 @@ label:"jobs/applications/inbox" newer_than:2d
 ## Troubleshooting
 
 1. `syncJobEmails` runs but no rows are appended:
-   - Confirm script properties are set (`SPREADSHEET_ID`, `SOURCE_LABEL`, `PROCESSED_LABEL`, `SEARCH_LIMIT`).
+   - Confirm script properties are set (`SPREADSHEET_ID`, `SOURCE_LABEL`, `PROCESSED_LABEL`, `SEARCH_LIMIT`, `GHOSTED_DAYS`).
    - Confirm pending Gmail results exist:
      - `label:"jobs/applications/inbox" -label:"jobs/applications/processed"`
 

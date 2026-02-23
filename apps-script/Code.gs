@@ -30,7 +30,8 @@ function getConfig() {
     spreadsheetId: props.getProperty('SPREADSHEET_ID') || '',
     sourceLabel: props.getProperty('SOURCE_LABEL') || 'jobs/applications/inbox',
     processedLabel: props.getProperty('PROCESSED_LABEL') || 'jobs/applications/processed',
-    searchLimit: Number(props.getProperty('SEARCH_LIMIT') || 150)
+    searchLimit: Number(props.getProperty('SEARCH_LIMIT') || 150),
+    ghostedDays: Number(props.getProperty('GHOSTED_DAYS') || 45)
   };
 }
 
@@ -428,6 +429,30 @@ function incrementYearMetric_(bucketMap, year, metric, amount) {
   yearMap.set(metric, (yearMap.get(metric) || 0) + amount);
 }
 
+function parseDateSafe_(value) {
+  const text = sanitize_(value);
+  if (!text) {
+    return null;
+  }
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, ghostedDays) {
+  const normalized = normalizeMetricToken_(rawStage);
+  if (normalized !== 'updated') {
+    return normalized;
+  }
+
+  const referenceDate = parseDateSafe_(appliedDate) || parseDateSafe_(createdAtUtc);
+  if (!referenceDate) {
+    return 'applied';
+  }
+
+  const ageDays = Math.floor((now.getTime() - referenceDate.getTime()) / (1000 * 60 * 60 * 24));
+  return ageDays >= ghostedDays ? 'ghosted' : 'applied';
+}
+
 function toTitleLabel_(token) {
   return sanitize_(token)
     .split('_')
@@ -449,6 +474,7 @@ function getOrCreateSheet_(ss, name) {
 }
 
 function rebuildMetrics() {
+  const cfg = getConfig();
   const ss = getSpreadsheet_();
   setupSheets();
 
@@ -459,7 +485,9 @@ function rebuildMetrics() {
   const last = appSheet.getLastRow();
   const metrics = new Map();
   const yearBuckets = new Map();
+  const now = new Date();
   metrics.set('total_rows', Math.max(0, last - 1));
+  metrics.set('ghosted_days_threshold', cfg.ghostedDays);
 
   if (last > 1) {
     const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
@@ -469,9 +497,15 @@ function rebuildMetrics() {
       const source = normalizeMetricToken_(row[1]);
       const company = sanitize_(row[2]);
       const role = sanitize_(row[3]);
-      const stage = normalizeMetricToken_(row[4]);
+      const rawStage = normalizeMetricToken_(row[4]);
       const appliedDate = sanitize_(row[6]);
       const year = inferYearBucket_(appliedDate, createdAtUtc);
+      const stage = resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, cfg.ghostedDays);
+
+      if (rawStage === 'updated') {
+        incrementMap_(metrics, 'stage_updated_raw', 1);
+        incrementYearMetric_(yearBuckets, year, 'stage_updated_raw', 1);
+      }
 
       incrementMap_(metrics, `stage_${stage}`, 1);
       incrementMap_(metrics, `source_${source}`, 1);
@@ -524,6 +558,7 @@ function rebuildMetrics() {
 }
 
 function buildDashboard() {
+  const cfg = getConfig();
   const ss = getSpreadsheet_();
   setupSheets();
 
@@ -551,14 +586,16 @@ function buildDashboard() {
   const sourceTotals = new Map();
   const monthlyTotals = new Map();
   const yearStage = new Map();
+  const now = new Date();
 
   rows.forEach((row) => {
     const createdAtUtc = sanitize_(row[0]);
     const source = normalizeMetricToken_(row[1]);
-    const stage = normalizeMetricToken_(row[4]);
+    const rawStage = normalizeMetricToken_(row[4]);
     const appliedDate = sanitize_(row[6]);
     const year = inferYearBucket_(appliedDate, createdAtUtc);
     const month = inferMonthBucket_(appliedDate, createdAtUtc);
+    const stage = resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, cfg.ghostedDays);
 
     incrementMap_(stageTotals, stage, 1);
     incrementMap_(sourceTotals, source, 1);
@@ -580,6 +617,16 @@ function buildDashboard() {
     yearStageRows.push([year, ...stages.map((stage) => values.get(stage) || 0)]);
   });
 
+  const yearAppliedInterviewRows = [['year', 'applied', 'interview']];
+  years.forEach((year) => {
+    const values = yearStage.get(year) || new Map();
+    yearAppliedInterviewRows.push([
+      year,
+      values.get('applied') || 0,
+      values.get('interview') || 0
+    ]);
+  });
+
   const monthRows = [['month', 'applications']];
   [...monthlyTotals.entries()]
     .filter((entry) => entry[0] !== 'unknown')
@@ -590,10 +637,12 @@ function buildDashboard() {
   dataSheet.getRange(1, 4, sourceRows.length, 2).setValues(sourceRows);
   dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length).setValues(yearStageRows);
   dataSheet.getRange(1, 12, monthRows.length, 2).setValues(monthRows);
+  dataSheet.getRange(1, 15, yearAppliedInterviewRows.length, 3).setValues(yearAppliedInterviewRows);
   dataSheet.getRange('A1:B1').setFontWeight('bold');
   dataSheet.getRange('D1:E1').setFontWeight('bold');
   dataSheet.getRange(1, 7, 1, yearStageRows[0].length).setFontWeight('bold');
   dataSheet.getRange('L1:M1').setFontWeight('bold');
+  dataSheet.getRange('O1:Q1').setFontWeight('bold');
 
   const stageChart = dashboardSheet
     .newChart()
@@ -634,6 +683,17 @@ function buildDashboard() {
       .setOption('title', 'Applications Over Time (Monthly)')
       .build();
     dashboardSheet.insertChart(monthChart);
+  }
+
+  if (yearAppliedInterviewRows.length > 1) {
+    const appliedInterviewChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.COLUMN)
+      .addRange(dataSheet.getRange(1, 15, yearAppliedInterviewRows.length, 3))
+      .setPosition(40, 1, 0, 0)
+      .setOption('title', 'Interview vs Applied by Year')
+      .build();
+    dashboardSheet.insertChart(appliedInterviewChart);
   }
 
   dataSheet.hideSheet();
