@@ -48,6 +48,7 @@ function setupSheets() {
   ensureSheet_(ss, 'Applications', APP_COLUMNS);
   ensureSheet_(ss, 'Metrics', ['metric', 'value']);
   ensureSheet_(ss, 'MetricsByYear', ['year', 'metric', 'value']);
+  ensureSheet_(ss, 'CurrentYearStats', ['month', 'applied', 'assessment', 'interview', 'offer', 'rejected', 'ghosted', 'total']);
   ensureSheet_(ss, 'FollowUpQueue', ['company', 'role', 'source', 'applied_date', 'days_since_apply', 'thread_url']);
 }
 
@@ -69,7 +70,8 @@ function syncJobEmails() {
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
-  const existingIds = getExistingExternalIds_(appSheet);
+  const index = buildApplicationIndex_(appSheet);
+  const existingIds = index.byExternalId;
 
   ensureLabel_(cfg.sourceLabel);
   ensureLabel_(cfg.processedLabel);
@@ -79,6 +81,7 @@ function syncJobEmails() {
 
   const processedLabel = GmailApp.getUserLabelByName(cfg.processedLabel);
   const rowsToAppend = [];
+  let nextRow = Math.max(2, appSheet.getLastRow() + 1);
 
   threads.forEach((thread) => {
     const messages = thread.getMessages();
@@ -87,8 +90,13 @@ function syncJobEmails() {
       if (!parsed.externalId || existingIds.has(parsed.externalId)) {
         return;
       }
+      const existingRow = findApplicationRow_(index, parsed.company, parsed.role, parsed.appliedDate, parsed.createdAtUtc);
+      if (existingRow) {
+        existingIds.set(parsed.externalId, existingRow);
+        return;
+      }
       rowsToAppend.push([
-        isoUtc_(new Date()),
+        parsed.createdAtUtc,
         parsed.source,
         parsed.company,
         parsed.role,
@@ -101,7 +109,8 @@ function syncJobEmails() {
         parsed.threadUrl,
         ''
       ]);
-      existingIds.add(parsed.externalId);
+      registerApplicationIndexRow_(index, nextRow, parsed.externalId, parsed.company, parsed.role, parsed.appliedDate, parsed.createdAtUtc);
+      nextRow += 1;
     });
 
     // Some threads (e.g., restricted/system conversations) may reject label operations.
@@ -140,6 +149,7 @@ function parseJobEmail_(message, thread) {
   }
 
   return {
+    createdAtUtc: isoUtc_(message.getDate()),
     source: 'Gmail',
     company: company || 'Unknown',
     role: role || 'Unknown',
@@ -266,6 +276,143 @@ function getExistingExternalIds_(appSheet) {
   return set;
 }
 
+function normalizeCompanyKey_(value) {
+  const normalized = normalizeMetricToken_(value)
+    .replace(/\b(inc|llc|ltd|corp|corporation|company|co|careers|recruiting|jobs)\b/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || '';
+}
+
+function normalizeRoleKey_(value) {
+  const normalized = normalizeMetricToken_(value)
+    .replace(/\b(position|role|opening|job)\b/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || '';
+}
+
+function normalizeDateKey_(appliedDate, createdAtUtc) {
+  const normalized = normalizeDate_(appliedDate);
+  if (normalized) {
+    return normalized;
+  }
+  const fallback = parseDateSafe_(createdAtUtc);
+  if (!fallback) {
+    return '';
+  }
+  return Utilities.formatDate(fallback, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function buildApplicationPrimaryKey_(company, role, appliedDate, createdAtUtc) {
+  const companyKey = normalizeCompanyKey_(company);
+  const roleKey = normalizeRoleKey_(role) || 'unknown';
+  const dateKey = normalizeDateKey_(appliedDate, createdAtUtc);
+  if (!companyKey || !dateKey) {
+    return '';
+  }
+  return `${companyKey}|${roleKey}|${dateKey}`;
+}
+
+function buildApplicationFallbackKey_(company, appliedDate, createdAtUtc) {
+  const companyKey = normalizeCompanyKey_(company);
+  const dateKey = normalizeDateKey_(appliedDate, createdAtUtc);
+  if (!companyKey || !dateKey) {
+    return '';
+  }
+  return `${companyKey}|${dateKey}`;
+}
+
+function buildApplicationIndex_(appSheet) {
+  const byExternalId = new Map();
+  const byPrimaryKey = new Map();
+  const byFallbackKey = new Map();
+  const rowSource = new Map();
+  const last = appSheet.getLastRow();
+
+  if (last <= 1) {
+    return {
+      byExternalId,
+      byPrimaryKey,
+      byFallbackKey,
+      rowSource
+    };
+  }
+
+  const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+  rows.forEach((row, idx) => {
+    const rowIndex = idx + 2;
+    const createdAtUtc = sanitize_(row[0]);
+    const source = sanitize_(row[1]);
+    const company = sanitize_(row[2]);
+    const role = sanitize_(row[3]);
+    const appliedDate = sanitize_(row[6]);
+    const externalId = sanitize_(row[7]);
+
+    if (externalId) {
+      byExternalId.set(externalId, rowIndex);
+    }
+
+    const primary = buildApplicationPrimaryKey_(company, role, appliedDate, createdAtUtc);
+    if (primary) {
+      byPrimaryKey.set(primary, rowIndex);
+    }
+
+    const fallback = buildApplicationFallbackKey_(company, appliedDate, createdAtUtc);
+    if (fallback) {
+      byFallbackKey.set(fallback, rowIndex);
+    }
+
+    rowSource.set(rowIndex, source);
+  });
+
+  return {
+    byExternalId,
+    byPrimaryKey,
+    byFallbackKey,
+    rowSource
+  };
+}
+
+function registerApplicationIndexRow_(index, rowIndex, externalId, company, role, appliedDate, createdAtUtc, source) {
+  const id = sanitize_(externalId);
+  if (id) {
+    index.byExternalId.set(id, rowIndex);
+  }
+
+  const primary = buildApplicationPrimaryKey_(company, role, appliedDate, createdAtUtc);
+  if (primary) {
+    index.byPrimaryKey.set(primary, rowIndex);
+  }
+
+  const fallback = buildApplicationFallbackKey_(company, appliedDate, createdAtUtc);
+  if (fallback) {
+    index.byFallbackKey.set(fallback, rowIndex);
+  }
+
+  if (source) {
+    index.rowSource.set(rowIndex, source);
+  }
+}
+
+function findApplicationRow_(index, company, role, appliedDate, createdAtUtc) {
+  const primary = buildApplicationPrimaryKey_(company, role, appliedDate, createdAtUtc);
+  if (primary && index.byPrimaryKey.has(primary)) {
+    return index.byPrimaryKey.get(primary);
+  }
+
+  const fallback = buildApplicationFallbackKey_(company, appliedDate, createdAtUtc);
+  if (fallback && index.byFallbackKey.has(fallback)) {
+    return index.byFallbackKey.get(fallback);
+  }
+
+  return 0;
+}
+
+function isSimplifySource_(source) {
+  return /simplify/i.test(sanitize_(source));
+}
+
 function importSimplifyCsvFromDrive(fileId) {
   const file = DriveApp.getFileById(fileId);
   const csvText = file.getBlob().getDataAsString();
@@ -277,7 +424,9 @@ function importSimplifyCsv_(csvText, sourceName) {
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
-  const existingIds = getExistingExternalIds_(appSheet);
+  const index = buildApplicationIndex_(appSheet);
+  const existingIds = index.byExternalId;
+  const sourceLabel = sourceName || 'Simplify';
 
   const rows = Utilities.parseCsv(csvText);
   if (rows.length < 2) {
@@ -294,6 +443,8 @@ function importSimplifyCsv_(csvText, sourceName) {
   };
 
   const toAppend = [];
+  const rowUpdates = [];
+  let nextRow = Math.max(2, appSheet.getLastRow() + 1);
   for (let i = 1; i < rows.length; i += 1) {
     const row = rows[i];
     const company = fromIndex_(row, idx.company) || 'Unknown';
@@ -303,13 +454,37 @@ function importSimplifyCsv_(csvText, sourceName) {
     const url = fromIndex_(row, idx.url);
     const ext = `simplify_${company}_${role}_${appliedDate}`.toLowerCase().replace(/\s+/g, '_');
 
+    const existingRow = existingIds.get(ext) || findApplicationRow_(index, company, role, appliedDate, '');
+
+    if (existingRow) {
+      const current = appSheet.getRange(existingRow, 1, 1, APP_COLUMNS.length).getValues()[0];
+      const existingStage = normalizeMetricToken_(current[4]);
+      const incomingStage = normalizeMetricToken_(status || 'applied');
+      const preferredStage = stageRank_(incomingStage) > stageRank_(existingStage) ? incomingStage : existingStage;
+      current[1] = sourceLabel;
+      current[2] = company;
+      current[3] = role;
+      current[4] = toTitleLabel_(preferredStage);
+      current[5] = toTitleLabel_(preferredStage);
+      if (appliedDate) {
+        current[6] = appliedDate;
+      }
+      current[7] = ext;
+      if (url) {
+        current[10] = url;
+      }
+      rowUpdates.push({ rowIndex: existingRow, values: current });
+      registerApplicationIndexRow_(index, existingRow, ext, company, role, appliedDate, current[0], sourceLabel);
+      continue;
+    }
+
     if (existingIds.has(ext)) {
       continue;
     }
 
     toAppend.push([
       isoUtc_(new Date()),
-      sourceName || 'Simplify',
+      sourceLabel,
       company,
       role,
       status,
@@ -322,8 +497,13 @@ function importSimplifyCsv_(csvText, sourceName) {
       ''
     ]);
 
-    existingIds.add(ext);
+    registerApplicationIndexRow_(index, nextRow, ext, company, role, appliedDate, isoUtc_(new Date()), sourceLabel);
+    nextRow += 1;
   }
+
+  rowUpdates.forEach((update) => {
+    appSheet.getRange(update.rowIndex, 1, 1, APP_COLUMNS.length).setValues([update.values]);
+  });
 
   if (toAppend.length > 0) {
     const start = appSheet.getLastRow() + 1;
@@ -453,6 +633,136 @@ function resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, ghost
   return ageDays >= ghostedDays ? 'ghosted' : 'applied';
 }
 
+function stageRank_(stageToken) {
+  const stage = normalizeMetricToken_(stageToken);
+  const ranks = {
+    unknown: 0,
+    updated: 1,
+    applied: 2,
+    ghosted: 2,
+    assessment: 3,
+    interview: 4,
+    rejected: 5,
+    offer: 6
+  };
+  return ranks[stage] || 0;
+}
+
+function isUnknownEntity_(value) {
+  const normalized = normalizeMetricToken_(value);
+  return !normalized || normalized === 'unknown' || normalized === 'na' || normalized === 'n_a';
+}
+
+function pickPreferredEntity_(first, second) {
+  if (!isUnknownEntity_(first)) {
+    return first;
+  }
+  if (!isUnknownEntity_(second)) {
+    return second;
+  }
+  return first || second || 'Unknown';
+}
+
+function pickPreferredDate_(first, second) {
+  const firstDate = normalizeDate_(first);
+  if (firstDate) {
+    return firstDate;
+  }
+  const secondDate = normalizeDate_(second);
+  if (secondDate) {
+    return secondDate;
+  }
+  return sanitize_(first) || sanitize_(second) || '';
+}
+
+function mergeCanonicalApplication_(left, right) {
+  const leftIsSimplify = isSimplifySource_(left.sourceRaw);
+  const rightIsSimplify = isSimplifySource_(right.sourceRaw);
+
+  let base = left;
+  if (rightIsSimplify && !leftIsSimplify) {
+    base = right;
+  } else if (!rightIsSimplify && !leftIsSimplify) {
+    const leftRank = stageRank_(left.stage);
+    const rightRank = stageRank_(right.stage);
+    if (rightRank > leftRank) {
+      base = right;
+    } else if (rightRank === leftRank) {
+      const leftDate = parseDateSafe_(left.createdAtUtc);
+      const rightDate = parseDateSafe_(right.createdAtUtc);
+      if (rightDate && leftDate && rightDate.getTime() > leftDate.getTime()) {
+        base = right;
+      }
+    }
+  }
+
+  const strongerStage = stageRank_(right.stage) > stageRank_(left.stage) ? right.stage : left.stage;
+  return {
+    ...base,
+    source: (leftIsSimplify || rightIsSimplify) ? 'simplify' : base.source,
+    sourceRaw: (leftIsSimplify || rightIsSimplify) ? 'Simplify' : base.sourceRaw,
+    company: pickPreferredEntity_(left.company, right.company),
+    role: pickPreferredEntity_(left.role, right.role),
+    appliedDate: pickPreferredDate_(left.appliedDate, right.appliedDate),
+    stage: strongerStage,
+    threadUrl: sanitize_(left.threadUrl) || sanitize_(right.threadUrl),
+    emailSubject: sanitize_(left.emailSubject) || sanitize_(right.emailSubject),
+    emailFrom: sanitize_(left.emailFrom) || sanitize_(right.emailFrom),
+    externalId: sanitize_(left.externalId) || sanitize_(right.externalId)
+  };
+}
+
+function buildCanonicalApplications_(rows, cfg) {
+  const now = new Date();
+  const deduped = new Map();
+
+  rows.forEach((row, idx) => {
+    const createdAtUtc = sanitize_(row[0]);
+    const sourceRaw = sanitize_(row[1]) || 'Unknown';
+    const source = isSimplifySource_(sourceRaw) ? 'simplify' : normalizeMetricToken_(sourceRaw);
+    const company = sanitize_(row[2]) || 'Unknown';
+    const role = sanitize_(row[3]) || 'Unknown';
+    const rawStage = sanitize_(row[4]);
+    const appliedDate = sanitize_(row[6]);
+    const externalId = sanitize_(row[7]);
+    const emailSubject = sanitize_(row[8]);
+    const emailFrom = sanitize_(row[9]);
+    const threadUrl = sanitize_(row[10]);
+    const stage = resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, cfg.ghostedDays);
+    const year = inferYearBucket_(appliedDate, createdAtUtc);
+    const month = inferMonthBucket_(appliedDate, createdAtUtc);
+    const primary = buildApplicationPrimaryKey_(company, role, appliedDate, createdAtUtc);
+    const fallback = buildApplicationFallbackKey_(company, appliedDate, createdAtUtc);
+    const key = primary ? `p:${primary}` : (fallback ? `f:${fallback}` : (externalId ? `e:${externalId}` : `r:${idx}`));
+
+    const candidate = {
+      rowIndex: idx + 2,
+      createdAtUtc,
+      sourceRaw,
+      source,
+      company,
+      role,
+      stage,
+      appliedDate,
+      year,
+      month,
+      externalId,
+      emailSubject,
+      emailFrom,
+      threadUrl
+    };
+
+    if (!deduped.has(key)) {
+      deduped.set(key, candidate);
+      return;
+    }
+
+    deduped.set(key, mergeCanonicalApplication_(deduped.get(key), candidate));
+  });
+
+  return [...deduped.values()];
+}
+
 function toTitleLabel_(token) {
   return sanitize_(token)
     .split('_')
@@ -473,6 +783,30 @@ function getOrCreateSheet_(ss, name) {
   return sheet;
 }
 
+function chartTextStyle_() {
+  return { color: '#e8eaed', fontSize: 12 };
+}
+
+function chartThemeOptions_(title) {
+  return {
+    title,
+    titleTextStyle: { color: '#e8eaed', fontSize: 18, bold: true },
+    legend: { position: 'right', textStyle: chartTextStyle_() },
+    backgroundColor: { fill: '#111111' },
+    chartArea: { backgroundColor: '#111111', left: 70, top: 60, width: '70%', height: '65%' },
+    hAxis: { textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() },
+    vAxis: { textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() }
+  };
+}
+
+function listMonthsForYear_(year) {
+  const months = [];
+  for (let month = 1; month <= 12; month += 1) {
+    months.push(`${year}-${String(month).padStart(2, '0')}`);
+  }
+  return months;
+}
+
 function rebuildMetrics() {
   const cfg = getConfig();
   const ss = getSpreadsheet_();
@@ -485,27 +819,20 @@ function rebuildMetrics() {
   const last = appSheet.getLastRow();
   const metrics = new Map();
   const yearBuckets = new Map();
-  const now = new Date();
-  metrics.set('total_rows', Math.max(0, last - 1));
+  metrics.set('raw_total_rows', Math.max(0, last - 1));
   metrics.set('ghosted_days_threshold', cfg.ghostedDays);
 
   if (last > 1) {
-    const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+    const rawRows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+    const canonicalRows = buildCanonicalApplications_(rawRows, cfg);
+    metrics.set('total_rows', canonicalRows.length);
 
-    rows.forEach((row) => {
-      const createdAtUtc = sanitize_(row[0]);
-      const source = normalizeMetricToken_(row[1]);
-      const company = sanitize_(row[2]);
-      const role = sanitize_(row[3]);
-      const rawStage = normalizeMetricToken_(row[4]);
-      const appliedDate = sanitize_(row[6]);
-      const year = inferYearBucket_(appliedDate, createdAtUtc);
-      const stage = resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, cfg.ghostedDays);
-
-      if (rawStage === 'updated') {
-        incrementMap_(metrics, 'stage_updated_raw', 1);
-        incrementYearMetric_(yearBuckets, year, 'stage_updated_raw', 1);
-      }
+    canonicalRows.forEach((row) => {
+      const source = normalizeMetricToken_(row.source);
+      const company = sanitize_(row.company);
+      const role = sanitize_(row.role);
+      const stage = normalizeMetricToken_(row.stage);
+      const year = row.year || 'unknown';
 
       incrementMap_(metrics, `stage_${stage}`, 1);
       incrementMap_(metrics, `source_${source}`, 1);
@@ -565,42 +892,50 @@ function buildDashboard() {
   const appSheet = ss.getSheetByName('Applications');
   const dashboardSheet = getOrCreateSheet_(ss, 'Dashboard');
   const dataSheet = getOrCreateSheet_(ss, 'DashboardData');
+  const currentYearSheet = getOrCreateSheet_(ss, 'CurrentYearStats');
 
   const last = appSheet.getLastRow();
   dataSheet.clear();
+  currentYearSheet.clear();
   dashboardSheet.clear();
   dashboardSheet.getCharts().forEach((chart) => dashboardSheet.removeChart(chart));
 
   dashboardSheet.getRange('A1').setValue('Job Funnel Dashboard').setFontWeight('bold').setFontSize(16);
   dashboardSheet.getRange('A2').setValue(`Last rebuilt: ${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
+  dashboardSheet.getRange('A3').setValue('Stage Trend by Year = yearly stacked count of stage-classified application records.');
 
   if (last <= 1) {
     dashboardSheet.getRange('A4').setValue('No application rows found. Run syncJobEmails first.');
     dataSheet.getRange(1, 1).setValue('No data');
+    currentYearSheet.getRange(1, 1).setValue('No data');
     dataSheet.hideSheet();
     return;
   }
 
-  const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+  const rawRows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+  const rows = buildCanonicalApplications_(rawRows, cfg);
   const stageTotals = new Map();
   const sourceTotals = new Map();
   const monthlyTotals = new Map();
   const yearStage = new Map();
-  const now = new Date();
+  const currentYearMonthly = new Map();
+  const currentYear = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy');
 
   rows.forEach((row) => {
-    const createdAtUtc = sanitize_(row[0]);
-    const source = normalizeMetricToken_(row[1]);
-    const rawStage = normalizeMetricToken_(row[4]);
-    const appliedDate = sanitize_(row[6]);
-    const year = inferYearBucket_(appliedDate, createdAtUtc);
-    const month = inferMonthBucket_(appliedDate, createdAtUtc);
-    const stage = resolveStageForMetrics_(rawStage, appliedDate, createdAtUtc, now, cfg.ghostedDays);
+    const source = normalizeMetricToken_(row.source);
+    const stage = normalizeMetricToken_(row.stage);
+    const year = row.year || 'unknown';
+    const month = row.month || 'unknown';
 
     incrementMap_(stageTotals, stage, 1);
     incrementMap_(sourceTotals, source, 1);
     incrementMap_(monthlyTotals, month, 1);
     incrementYearMetric_(yearStage, year, stage, 1);
+
+    if (year === currentYear && month !== 'unknown') {
+      incrementYearMetric_(currentYearMonthly, month, stage, 1);
+      incrementYearMetric_(currentYearMonthly, month, 'total', 1);
+    }
   });
 
   const stageRows = [['stage', 'count']];
@@ -633,24 +968,50 @@ function buildDashboard() {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .forEach((entry) => monthRows.push([entry[0], entry[1]]));
 
+  const currentYearRows = [['month', 'applied', 'assessment', 'interview', 'offer', 'rejected', 'ghosted', 'total']];
+  listMonthsForYear_(currentYear).forEach((month) => {
+    const bucket = currentYearMonthly.get(month) || new Map();
+    currentYearRows.push([
+      month,
+      bucket.get('applied') || 0,
+      bucket.get('assessment') || 0,
+      bucket.get('interview') || 0,
+      bucket.get('offer') || 0,
+      bucket.get('rejected') || 0,
+      bucket.get('ghosted') || 0,
+      bucket.get('total') || 0
+    ]);
+  });
+
   dataSheet.getRange(1, 1, stageRows.length, 2).setValues(stageRows);
   dataSheet.getRange(1, 4, sourceRows.length, 2).setValues(sourceRows);
   dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length).setValues(yearStageRows);
   dataSheet.getRange(1, 12, monthRows.length, 2).setValues(monthRows);
   dataSheet.getRange(1, 15, yearAppliedInterviewRows.length, 3).setValues(yearAppliedInterviewRows);
+  dataSheet.getRange(1, 19, currentYearRows.length, currentYearRows[0].length).setValues(currentYearRows);
   dataSheet.getRange('A1:B1').setFontWeight('bold');
   dataSheet.getRange('D1:E1').setFontWeight('bold');
   dataSheet.getRange(1, 7, 1, yearStageRows[0].length).setFontWeight('bold');
   dataSheet.getRange('L1:M1').setFontWeight('bold');
   dataSheet.getRange('O1:Q1').setFontWeight('bold');
+  dataSheet.getRange(1, 19, 1, currentYearRows[0].length).setFontWeight('bold');
+
+  currentYearSheet.getRange(1, 1, currentYearRows.length, currentYearRows[0].length).setValues(currentYearRows);
+  currentYearSheet.setFrozenRows(1);
+  currentYearSheet.getRange('A1:H1').setFontWeight('bold');
+  currentYearSheet.getRange('J1').setValue('Current year monthly stats are the primary operational view.');
 
   const stageChart = dashboardSheet
     .newChart()
     .setChartType(Charts.ChartType.PIE)
     .addRange(dataSheet.getRange(1, 1, stageRows.length, 2))
+    .setNumHeaders(1)
     .setPosition(4, 1, 0, 0)
-    .setOption('title', 'Stage Distribution')
-    .setOption('legend', { position: 'right' })
+    .setOption('title', chartThemeOptions_('Stage Distribution').title)
+    .setOption('titleTextStyle', chartThemeOptions_('Stage Distribution').titleTextStyle)
+    .setOption('legend', chartThemeOptions_('Stage Distribution').legend)
+    .setOption('backgroundColor', chartThemeOptions_('Stage Distribution').backgroundColor)
+    .setOption('chartArea', chartThemeOptions_('Stage Distribution').chartArea)
     .build();
   dashboardSheet.insertChart(stageChart);
 
@@ -658,9 +1019,13 @@ function buildDashboard() {
     .newChart()
     .setChartType(Charts.ChartType.PIE)
     .addRange(dataSheet.getRange(1, 4, sourceRows.length, 2))
+    .setNumHeaders(1)
     .setPosition(4, 8, 0, 0)
-    .setOption('title', 'Source Distribution')
-    .setOption('legend', { position: 'right' })
+    .setOption('title', chartThemeOptions_('Source Distribution').title)
+    .setOption('titleTextStyle', chartThemeOptions_('Source Distribution').titleTextStyle)
+    .setOption('legend', chartThemeOptions_('Source Distribution').legend)
+    .setOption('backgroundColor', chartThemeOptions_('Source Distribution').backgroundColor)
+    .setOption('chartArea', chartThemeOptions_('Source Distribution').chartArea)
     .build();
   dashboardSheet.insertChart(sourceChart);
 
@@ -668,8 +1033,15 @@ function buildDashboard() {
     .newChart()
     .setChartType(Charts.ChartType.COLUMN)
     .addRange(dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length))
+    .setNumHeaders(1)
     .setPosition(22, 1, 0, 0)
-    .setOption('title', 'Stage Trend by Year')
+    .setOption('title', chartThemeOptions_('Yearly Stage Counts (Stacked)').title)
+    .setOption('titleTextStyle', chartThemeOptions_('Yearly Stage Counts (Stacked)').titleTextStyle)
+    .setOption('legend', chartThemeOptions_('Yearly Stage Counts (Stacked)').legend)
+    .setOption('backgroundColor', chartThemeOptions_('Yearly Stage Counts (Stacked)').backgroundColor)
+    .setOption('chartArea', chartThemeOptions_('Yearly Stage Counts (Stacked)').chartArea)
+    .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+    .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
     .setOption('isStacked', true)
     .build();
   dashboardSheet.insertChart(yearStageChart);
@@ -679,8 +1051,15 @@ function buildDashboard() {
       .newChart()
       .setChartType(Charts.ChartType.LINE)
       .addRange(dataSheet.getRange(1, 12, monthRows.length, 2))
+      .setNumHeaders(1)
       .setPosition(22, 8, 0, 0)
-      .setOption('title', 'Applications Over Time (Monthly)')
+      .setOption('title', chartThemeOptions_('Applications Over Time (Monthly)').title)
+      .setOption('titleTextStyle', chartThemeOptions_('Applications Over Time (Monthly)').titleTextStyle)
+      .setOption('legend', chartThemeOptions_('Applications Over Time (Monthly)').legend)
+      .setOption('backgroundColor', chartThemeOptions_('Applications Over Time (Monthly)').backgroundColor)
+      .setOption('chartArea', chartThemeOptions_('Applications Over Time (Monthly)').chartArea)
+      .setOption('hAxis', { title: 'Month', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('vAxis', { title: 'Applications', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
       .build();
     dashboardSheet.insertChart(monthChart);
   }
@@ -690,10 +1069,36 @@ function buildDashboard() {
       .newChart()
       .setChartType(Charts.ChartType.COLUMN)
       .addRange(dataSheet.getRange(1, 15, yearAppliedInterviewRows.length, 3))
+      .setNumHeaders(1)
       .setPosition(40, 1, 0, 0)
-      .setOption('title', 'Interview vs Applied by Year')
+      .setOption('title', chartThemeOptions_('Interview vs Applied by Year').title)
+      .setOption('titleTextStyle', chartThemeOptions_('Interview vs Applied by Year').titleTextStyle)
+      .setOption('legend', chartThemeOptions_('Interview vs Applied by Year').legend)
+      .setOption('backgroundColor', chartThemeOptions_('Interview vs Applied by Year').backgroundColor)
+      .setOption('chartArea', chartThemeOptions_('Interview vs Applied by Year').chartArea)
+      .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
       .build();
     dashboardSheet.insertChart(appliedInterviewChart);
+  }
+
+  if (currentYearRows.length > 1) {
+    const currentYearChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.COLUMN)
+      .addRange(dataSheet.getRange(1, 19, currentYearRows.length, 8))
+      .setNumHeaders(1)
+      .setPosition(40, 8, 0, 0)
+      .setOption('title', chartThemeOptions_(`${currentYear} Monthly Funnel`).title)
+      .setOption('titleTextStyle', chartThemeOptions_(`${currentYear} Monthly Funnel`).titleTextStyle)
+      .setOption('legend', chartThemeOptions_(`${currentYear} Monthly Funnel`).legend)
+      .setOption('backgroundColor', chartThemeOptions_(`${currentYear} Monthly Funnel`).backgroundColor)
+      .setOption('chartArea', chartThemeOptions_(`${currentYear} Monthly Funnel`).chartArea)
+      .setOption('hAxis', { title: 'Month', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('isStacked', false)
+      .build();
+    dashboardSheet.insertChart(currentYearChart);
   }
 
   dataSheet.hideSheet();
@@ -704,6 +1109,7 @@ function buildDefaultFollowUpQueue() {
 }
 
 function buildFollowUpQueue(daysWithoutTouch, maxItems) {
+  const cfg = getConfig();
   const ss = getSpreadsheet_();
   setupSheets();
 
@@ -714,25 +1120,26 @@ function buildFollowUpQueue(daysWithoutTouch, maxItems) {
   const output = [['company', 'role', 'source', 'applied_date', 'days_since_apply', 'thread_url']];
 
   if (last > 1) {
-    const rows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+    const rawRows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+    const rows = buildCanonicalApplications_(rawRows, cfg);
     const now = new Date();
 
     const candidates = rows
-      .map((r) => {
-        const stage = sanitize_(r[4]).toLowerCase();
-        const applied = sanitize_(r[6]);
+      .map((row) => {
+        const stage = normalizeMetricToken_(row.stage);
+        const applied = sanitize_(row.appliedDate);
         const appliedDate = applied ? new Date(applied) : null;
         const days = appliedDate && !isNaN(appliedDate.getTime())
           ? Math.floor((now.getTime() - appliedDate.getTime()) / (1000 * 60 * 60 * 24))
           : 0;
 
         return {
-          company: sanitize_(r[2]),
-          role: sanitize_(r[3]),
-          source: sanitize_(r[1]),
+          company: sanitize_(row.company),
+          role: sanitize_(row.role),
+          source: sanitize_(row.sourceRaw || row.source),
           appliedDate: applied,
           daysSince: days,
-          threadUrl: sanitize_(r[10]),
+          threadUrl: sanitize_(row.threadUrl),
           stage
         };
       })

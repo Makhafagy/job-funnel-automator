@@ -16,6 +16,7 @@ Applying to jobs across multiple platforms creates fragmented tracking data and 
 - Extract company, role, and stage signals from email subject/body
 - Dedupe entries using message IDs and stable fallback keys
 - Import non-email applications from Simplify export CSVs
+- Treat Simplify as primary for deduped application records
 - Rebuild stage metrics in a `Metrics` sheet
 - Break down metrics by year in `MetricsByYear` for easier auditing
 - Auto-generate a visual dashboard (`Dashboard`) with charts
@@ -49,6 +50,12 @@ Pipeline summary:
 3. Simplify CSV exports are normalized with `scripts/normalize_simplify_export.py` and imported in batch.
 4. Metrics and follow-up queues are rebuilt from a single source of truth.
 
+Deduplication model:
+
+- Simplify rows are treated as the primary application record when overlap exists.
+- Gmail is used to capture additional applications that are not already represented by Simplify.
+- Canonical analytics (metrics/dashboard/follow-up) operate on deduped records.
+
 ## Screenshots
 
 ### Applications Pipeline View
@@ -73,9 +80,16 @@ This makes it easy to audit stage inflation by year (for example `year_2025_stag
 
 - Stage Distribution
 - Source Distribution
-- Stage Trend by Year
+- Yearly Stage Counts (Stacked)
 - Applications Over Time (Monthly)
 - Interview vs Applied by Year
+- Current Year Monthly Funnel
+
+Meaning of `Yearly Stage Counts (Stacked)`:
+
+- X-axis: year
+- Y-axis: count of deduped application records
+- Each color: stage bucket count for that year
 
 ### Follow-Up Queue
 
@@ -174,12 +188,19 @@ Then import the normalized CSV through:
 - Apps Script function `importSimplifyCsvFromDrive(fileId)`
 - or paste rows directly into `Applications`
 
+When imported via Apps Script, Simplify rows upsert existing matches and reduce cross-source duplicates.
+
 ## Operational workflow
 
 - Hourly: Gmail trigger ingests new labeled emails.
 - Daily: run `rebuildMetrics()`.
 - Daily (optional): run `buildDashboard()` if you want a manual visual refresh. (`rebuildMetrics()` also rebuilds dashboard automatically.)
 - Weekly: run `buildFollowUpQueue(daysWithoutTouch, maxItems)` and process the queue.
+
+Current-year monthly view:
+
+- `CurrentYearStats` sheet is rebuilt by dashboard generation.
+- This is the primary month-by-month operational view for the current year.
 
 Quick operational checks:
 
@@ -206,7 +227,7 @@ label:"jobs/applications/inbox" newer_than:2d
 - Heuristic parsing can leave `company` or `role` as `Unknown` for noisy templates.
 - Broad keywords (for example "offer" or "recruiter") can cause false positives if filter exclusions are too weak.
 - This pipeline does not capture non-email applications unless you import CSV/manual rows.
-- Metrics are event-based (email updates), not a strict one-row-per-application model.
+- Metrics are deduped to approximate one-row-per-application using company/role/date keys plus source preference.
 
 ## Troubleshooting
 
