@@ -12,6 +12,7 @@ const APP_COLUMNS = [
   'thread_url',
   'notes'
 ];
+const DASHBOARD_VERSION = 'v2026-02-23-03';
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -911,8 +912,9 @@ function buildDashboard() {
   currentYearSheet.clear();
   dashboardSheet.clear();
   dashboardSheet.getCharts().forEach((chart) => dashboardSheet.removeChart(chart));
+  dashboardSheet.getRange(1, 1, 120, 30).setBackground('#ffffff').setFontColor('#202124');
 
-  dashboardSheet.getRange('A1').setValue('Job Funnel Dashboard').setFontWeight('bold').setFontSize(16);
+  dashboardSheet.getRange('A1').setValue(`Job Funnel Dashboard ${DASHBOARD_VERSION}`).setFontWeight('bold').setFontSize(16);
   dashboardSheet.getRange('A2').setValue(`Last rebuilt: ${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')}`);
   dashboardSheet.getRange('A3').setValue('Stage Trend by Year = yearly stacked count of stage-classified application records.');
 
@@ -1014,54 +1016,71 @@ function buildDashboard() {
   currentYearSheet.setFrozenRows(1);
   currentYearSheet.getRange('A1:H1').setFontWeight('bold');
   currentYearSheet.getRange('J1').setValue('Current year monthly stats are the primary operational view.');
+  dashboardSheet.getRange('A6').setValue(`Stage rows: ${Math.max(0, stageRows.length - 1)}`);
+  dashboardSheet.getRange('A7').setValue(`Source rows: ${Math.max(0, sourceRows.length - 1)}`);
+  dashboardSheet.getRange('A8').setValue(`Year-stage rows: ${Math.max(0, yearStageRows.length - 1)}`);
+  dashboardSheet.getRange('A9').setValue(`Monthly rows: ${Math.max(0, monthRows.length - 1)}`);
+  dashboardSheet.getRange('A10').setValue(`Current year rows: ${Math.max(0, currentYearRows.length - 1)}`);
 
-  const stageChart = dashboardSheet
-    .newChart()
-    .setChartType(Charts.ChartType.PIE)
-    .addRange(dataSheet.getRange(1, 1, stageRows.length, 2))
-    .setNumHeaders(1)
-    .setPosition(4, 1, 0, 0)
-    .setOption('title', chartThemeOptions_('Stage Distribution').title)
-    .setOption('titleTextStyle', chartThemeOptions_('Stage Distribution').titleTextStyle)
-    .setOption('legend', chartThemeOptions_('Stage Distribution').legend)
-    .setOption('backgroundColor', chartThemeOptions_('Stage Distribution').backgroundColor)
-    .setOption('chartArea', chartThemeOptions_('Stage Distribution').chartArea)
-    .setOption('colors', chartPalette_(Math.max(1, stageRows[0].length - 1)))
-    .build();
-  dashboardSheet.insertChart(stageChart);
+  if (stageRows.length > 1) {
+    const stageChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.PIE)
+      .addRange(dataSheet.getRange(1, 1, stageRows.length, 2))
+      .setNumHeaders(1)
+      .setPosition(4, 1, 0, 0)
+      .setOption('title', chartThemeOptions_('Stage Distribution').title)
+      .setOption('titleTextStyle', chartThemeOptions_('Stage Distribution').titleTextStyle)
+      .setOption('legend', chartThemeOptions_('Stage Distribution').legend)
+      .setOption('backgroundColor', chartThemeOptions_('Stage Distribution').backgroundColor)
+      .setOption('chartArea', chartThemeOptions_('Stage Distribution').chartArea)
+      .setOption('colors', chartPalette_(Math.max(1, stageRows[0].length - 1)))
+      .build();
+    dashboardSheet.insertChart(stageChart);
+  } else {
+    dashboardSheet.getRange('A12').setValue('Stage chart not built: no stage data rows.');
+  }
 
-  const sourceChart = dashboardSheet
-    .newChart()
-    .setChartType(Charts.ChartType.PIE)
-    .addRange(dataSheet.getRange(1, 4, sourceRows.length, 2))
-    .setNumHeaders(1)
-    .setPosition(4, 8, 0, 0)
-    .setOption('title', chartThemeOptions_('Source Distribution').title)
-    .setOption('titleTextStyle', chartThemeOptions_('Source Distribution').titleTextStyle)
-    .setOption('legend', chartThemeOptions_('Source Distribution').legend)
-    .setOption('backgroundColor', chartThemeOptions_('Source Distribution').backgroundColor)
-    .setOption('chartArea', chartThemeOptions_('Source Distribution').chartArea)
-    .setOption('colors', chartPalette_(Math.max(1, sourceRows[0].length - 1)))
-    .build();
-  dashboardSheet.insertChart(sourceChart);
+  if (sourceRows.length > 1) {
+    const sourceChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.PIE)
+      .addRange(dataSheet.getRange(1, 4, sourceRows.length, 2))
+      .setNumHeaders(1)
+      .setPosition(4, 8, 0, 0)
+      .setOption('title', chartThemeOptions_('Source Distribution').title)
+      .setOption('titleTextStyle', chartThemeOptions_('Source Distribution').titleTextStyle)
+      .setOption('legend', chartThemeOptions_('Source Distribution').legend)
+      .setOption('backgroundColor', chartThemeOptions_('Source Distribution').backgroundColor)
+      .setOption('chartArea', chartThemeOptions_('Source Distribution').chartArea)
+      .setOption('colors', chartPalette_(Math.max(1, sourceRows[0].length - 1)))
+      .build();
+    dashboardSheet.insertChart(sourceChart);
+  } else {
+    dashboardSheet.getRange('H12').setValue('Source chart not built: no source data rows.');
+  }
 
-  const yearStageChart = dashboardSheet
-    .newChart()
-    .setChartType(Charts.ChartType.COLUMN)
-    .addRange(dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length))
-    .setNumHeaders(1)
-    .setPosition(22, 1, 0, 0)
-    .setOption('title', chartThemeOptions_('Yearly Stage Counts (Stacked)').title)
-    .setOption('titleTextStyle', chartThemeOptions_('Yearly Stage Counts (Stacked)').titleTextStyle)
-    .setOption('legend', chartThemeOptions_('Yearly Stage Counts (Stacked)').legend)
-    .setOption('backgroundColor', chartThemeOptions_('Yearly Stage Counts (Stacked)').backgroundColor)
-    .setOption('chartArea', chartThemeOptions_('Yearly Stage Counts (Stacked)').chartArea)
-    .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
-    .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
-    .setOption('colors', chartPalette_(Math.max(1, yearStageRows[0].length - 1)))
-    .setOption('isStacked', true)
-    .build();
-  dashboardSheet.insertChart(yearStageChart);
+  if (yearStageRows.length > 1 && yearStageRows[0].length > 1) {
+    const yearStageChart = dashboardSheet
+      .newChart()
+      .setChartType(Charts.ChartType.COLUMN)
+      .addRange(dataSheet.getRange(1, 7, yearStageRows.length, yearStageRows[0].length))
+      .setNumHeaders(1)
+      .setPosition(22, 1, 0, 0)
+      .setOption('title', chartThemeOptions_('Yearly Stage Counts (Stacked)').title)
+      .setOption('titleTextStyle', chartThemeOptions_('Yearly Stage Counts (Stacked)').titleTextStyle)
+      .setOption('legend', chartThemeOptions_('Yearly Stage Counts (Stacked)').legend)
+      .setOption('backgroundColor', chartThemeOptions_('Yearly Stage Counts (Stacked)').backgroundColor)
+      .setOption('chartArea', chartThemeOptions_('Yearly Stage Counts (Stacked)').chartArea)
+      .setOption('hAxis', { title: 'Year', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('vAxis', { title: 'Count', textStyle: chartTextStyle_(), titleTextStyle: chartTextStyle_() })
+      .setOption('colors', chartPalette_(Math.max(1, yearStageRows[0].length - 1)))
+      .setOption('isStacked', true)
+      .build();
+    dashboardSheet.insertChart(yearStageChart);
+  } else {
+    dashboardSheet.getRange('A22').setValue('Yearly stage chart not built: no yearly stage data rows.');
+  }
 
   if (monthRows.length > 1) {
     const monthChart = dashboardSheet
@@ -1121,7 +1140,7 @@ function buildDashboard() {
     dashboardSheet.insertChart(currentYearChart);
   }
 
-  dataSheet.hideSheet();
+  // Keep DashboardData visible for troubleshooting when chart rendering looks blank.
 }
 
 function buildDefaultFollowUpQueue() {
