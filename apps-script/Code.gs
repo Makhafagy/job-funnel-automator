@@ -12,7 +12,9 @@ const APP_COLUMNS = [
   'thread_url',
   'notes'
 ];
-const DASHBOARD_VERSION = 'v2026-02-23-03';
+const DASHBOARD_VERSION = 'v2026-03-16-01';
+const DEFAULT_SYNC_THREAD_BATCH_SIZE = 30;
+const DEFAULT_SYNC_MAX_RUNTIME_MS = 240000;
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -25,14 +27,21 @@ function onOpen() {
     .addToUi();
 }
 
+function numberProperty_(props, name, fallback) {
+  const parsed = Number(props.getProperty(name));
+  return isNaN(parsed) ? fallback : parsed;
+}
+
 function getConfig() {
   const props = PropertiesService.getScriptProperties();
   return {
     spreadsheetId: props.getProperty('SPREADSHEET_ID') || '',
     sourceLabel: props.getProperty('SOURCE_LABEL') || 'jobs/applications/inbox',
     processedLabel: props.getProperty('PROCESSED_LABEL') || 'jobs/applications/processed',
-    searchLimit: Number(props.getProperty('SEARCH_LIMIT') || 150),
-    ghostedDays: Number(props.getProperty('GHOSTED_DAYS') || 45)
+    searchLimit: Math.max(1, numberProperty_(props, 'SEARCH_LIMIT', 150)),
+    ghostedDays: Math.max(1, numberProperty_(props, 'GHOSTED_DAYS', 45)),
+    syncThreadBatchSize: Math.max(1, numberProperty_(props, 'SYNC_THREAD_BATCH_SIZE', DEFAULT_SYNC_THREAD_BATCH_SIZE)),
+    syncMaxRuntimeMs: Math.max(60000, numberProperty_(props, 'SYNC_MAX_RUNTIME_MS', DEFAULT_SYNC_MAX_RUNTIME_MS))
   };
 }
 
@@ -68,6 +77,7 @@ function ensureSheet_(ss, name, headers) {
 function syncJobEmails() {
   const cfg = getConfig();
   const ss = getSpreadsheet_();
+  const startedAtMs = Date.now();
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
@@ -78,23 +88,46 @@ function syncJobEmails() {
   ensureLabel_(cfg.processedLabel);
 
   const query = `label:"${cfg.sourceLabel}" -label:"${cfg.processedLabel}"`;
-  const threads = GmailApp.search(query, 0, cfg.searchLimit);
+  const threadLimit = Math.min(cfg.searchLimit, cfg.syncThreadBatchSize);
+  const threads = GmailApp.search(query, 0, threadLimit);
 
   const processedLabel = GmailApp.getUserLabelByName(cfg.processedLabel);
   const rowsToAppend = [];
   let nextRow = Math.max(2, appSheet.getLastRow() + 1);
+  let processedThreads = 0;
+  let processedMessages = 0;
+  let skippedThreads = 0;
+  let runtimeBudgetReached = false;
 
-  threads.forEach((thread) => {
+  for (let i = 0; i < threads.length; i += 1) {
+    if (hasExceededRuntimeBudget_(startedAtMs, cfg.syncMaxRuntimeMs)) {
+      skippedThreads = threads.length - i;
+      runtimeBudgetReached = true;
+      break;
+    }
+
+    const thread = threads[i];
     const messages = thread.getMessages();
-    messages.forEach((message) => {
+    let completedThread = true;
+
+    for (let j = 0; j < messages.length; j += 1) {
+      if (hasExceededRuntimeBudget_(startedAtMs, cfg.syncMaxRuntimeMs)) {
+        skippedThreads = threads.length - i;
+        runtimeBudgetReached = true;
+        completedThread = false;
+        break;
+      }
+
+      const message = messages[j];
+      processedMessages += 1;
       const parsed = parseJobEmail_(message, thread);
       if (!parsed.externalId || existingIds.has(parsed.externalId)) {
-        return;
+        continue;
       }
       const existingRow = findApplicationRow_(index, parsed.company, parsed.role, parsed.appliedDate, parsed.createdAtUtc);
       if (existingRow) {
         existingIds.set(parsed.externalId, existingRow);
-        return;
+        continue;
       }
       rowsToAppend.push([
         parsed.createdAtUtc,
@@ -112,7 +145,11 @@ function syncJobEmails() {
       ]);
       registerApplicationIndexRow_(index, nextRow, parsed.externalId, parsed.company, parsed.role, parsed.appliedDate, parsed.createdAtUtc);
       nextRow += 1;
-    });
+    }
+
+    if (!completedThread) {
+      break;
+    }
 
     // Some threads (e.g., restricted/system conversations) may reject label operations.
     // Continue sync instead of failing the full run.
@@ -121,28 +158,53 @@ function syncJobEmails() {
     } catch (error) {
       Logger.log(`Could not add processed label to thread ${thread.getId()}: ${error}`);
     }
-  });
+    processedThreads += 1;
+  }
 
   if (rowsToAppend.length > 0) {
     const start = appSheet.getLastRow() + 1;
     appSheet
       .getRange(start, 1, rowsToAppend.length, APP_COLUMNS.length)
       .setValues(rowsToAppend);
+
+    rebuildMetrics_({
+      buildDashboard: false,
+      cfg,
+      ss
+    });
   }
 
-  rebuildMetrics();
+  Logger.log(
+    `syncJobEmails processed ${processedThreads} thread(s), ${processedMessages} message(s), appended ${rowsToAppend.length} row(s), skipped ${skippedThreads} pending thread(s).`
+  );
+  if (runtimeBudgetReached) {
+    Logger.log(`syncJobEmails stopped early after reaching the runtime budget (${cfg.syncMaxRuntimeMs}ms).`);
+  }
 }
 
 function parseJobEmail_(message, thread) {
   const subject = sanitize_(message.getSubject());
   const from = sanitize_(message.getFrom());
-  const body = sanitize_(message.getPlainBody() || '');
-  const lower = `${subject}\n${body}`.toLowerCase();
+  const messageDate = message.getDate();
+  let stage = inferStage_(subject.toLowerCase());
+  let company = inferCompany_(subject, from, '');
+  let role = inferRole_(subject, '');
 
-  const stage = inferStage_(lower);
-  const company = inferCompany_(subject, from, body);
-  const role = inferRole_(subject, body);
-  const appliedDate = formatDate_(message.getDate());
+  if (stage === 'Updated' || !company || !role) {
+    const body = sanitize_(message.getPlainBody() || '');
+    const lower = `${subject}\n${body}`.toLowerCase();
+    if (stage === 'Updated') {
+      stage = inferStage_(lower);
+    }
+    if (!company) {
+      company = inferCompany_(subject, from, body);
+    }
+    if (!role) {
+      role = inferRole_(subject, body);
+    }
+  }
+
+  const appliedDate = formatDate_(messageDate);
 
   let externalId = sanitize_(message.getHeader('Message-ID'));
   if (!externalId) {
@@ -150,7 +212,7 @@ function parseJobEmail_(message, thread) {
   }
 
   return {
-    createdAtUtc: isoUtc_(message.getDate()),
+    createdAtUtc: isoUtc_(messageDate),
     source: 'Gmail',
     company: company || 'Unknown',
     role: role || 'Unknown',
@@ -248,6 +310,10 @@ function isoUtc_(date) {
 
 function formatDate_(date) {
   return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function hasExceededRuntimeBudget_(startedAtMs, maxRuntimeMs) {
+  return (Date.now() - startedAtMs) >= maxRuntimeMs;
 }
 
 function ensureLabel_(name) {
@@ -821,8 +887,13 @@ function listMonthsForYear_(year) {
 }
 
 function rebuildMetrics() {
-  const cfg = getConfig();
-  const ss = getSpreadsheet_();
+  rebuildMetrics_({ buildDashboard: true });
+}
+
+function rebuildMetrics_(options) {
+  const opts = options || {};
+  const cfg = opts.cfg || getConfig();
+  const ss = opts.ss || getSpreadsheet_();
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
@@ -832,12 +903,13 @@ function rebuildMetrics() {
   const last = appSheet.getLastRow();
   const metrics = new Map();
   const yearBuckets = new Map();
+  let canonicalRows = [];
   metrics.set('raw_total_rows', Math.max(0, last - 1));
   metrics.set('ghosted_days_threshold', cfg.ghostedDays);
 
   if (last > 1) {
-    const rawRows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
-    const canonicalRows = buildCanonicalApplications_(rawRows, cfg);
+    const rawRows = opts.rawRows || appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
+    canonicalRows = opts.canonicalRows || buildCanonicalApplications_(rawRows, cfg);
     metrics.set('total_rows', canonicalRows.length);
 
     canonicalRows.forEach((row) => {
@@ -894,12 +966,23 @@ function rebuildMetrics() {
   byYearSheet.getRange(1, 1, byYearOutput.length, 3).setValues(byYearOutput);
   byYearSheet.setFrozenRows(1);
 
-  buildDashboard();
+  if (opts.buildDashboard !== false) {
+    buildDashboard_({
+      cfg,
+      ss,
+      canonicalRows
+    });
+  }
 }
 
 function buildDashboard() {
-  const cfg = getConfig();
-  const ss = getSpreadsheet_();
+  buildDashboard_();
+}
+
+function buildDashboard_(options) {
+  const opts = options || {};
+  const cfg = opts.cfg || getConfig();
+  const ss = opts.ss || getSpreadsheet_();
   setupSheets();
 
   const appSheet = ss.getSheetByName('Applications');
@@ -924,8 +1007,10 @@ function buildDashboard() {
     return;
   }
 
-  const rawRows = appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues();
-  const rows = buildCanonicalApplications_(rawRows, cfg);
+  const rows = opts.canonicalRows || buildCanonicalApplications_(
+    appSheet.getRange(2, 1, last - 1, APP_COLUMNS.length).getValues(),
+    cfg
+  );
   const stageTotals = new Map();
   const sourceTotals = new Map();
   const monthlyTotals = new Map();

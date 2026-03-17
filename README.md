@@ -130,10 +130,12 @@ Create a new Google Sheet and copy its Spreadsheet ID.
    - `PROCESSED_LABEL` = `jobs/applications/processed`
    - `SEARCH_LIMIT` = `150`
    - `GHOSTED_DAYS` = `45` (optional; `Updated` older than this is counted as `Ghosted`)
+   - `SYNC_THREAD_BATCH_SIZE` = `30` (optional; caps how many labeled threads one trigger run will process)
+   - `SYNC_MAX_RUNTIME_MS` = `240000` (optional; stops sync early before Apps Script trigger timeout)
 4. Run `setupSheets()` once.
 5. Run `syncJobEmails()` once to authorize Gmail + Sheets permissions.
 6. Add a time-driven trigger for `syncJobEmails()` (hourly recommended).
-7. For first-time backfill, run `syncJobEmails()` manually a few times until pending labeled messages are drained.
+7. For first-time backfill, run `syncJobEmails()` manually a few times until pending labeled messages are drained. The sync now processes a bounded batch per run so large backfills are drained across multiple executions instead of timing out.
 8. Run `buildDashboard()` once (or use the menu item `Job Funnel -> Build Dashboard`).
 
 ### 3) Gmail labels
@@ -192,9 +194,9 @@ When imported via Apps Script, Simplify rows upsert existing matches and reduce 
 
 ## Operational workflow
 
-- Hourly: Gmail trigger ingests new labeled emails.
-- Daily: run `rebuildMetrics()`.
-- Daily (optional): run `buildDashboard()` if you want a manual visual refresh. (`rebuildMetrics()` also rebuilds dashboard automatically.)
+- Hourly: Gmail trigger ingests a bounded batch of new labeled emails and refreshes `Metrics` when new rows are added. It intentionally skips dashboard generation to stay under Apps Script trigger limits.
+- Daily: run `rebuildMetrics()` to refresh `Metrics`, `MetricsByYear`, and `Dashboard`.
+- Daily (optional): run `buildDashboard()` if you want a manual visual refresh without rebuilding metrics first.
 - Weekly: run `buildFollowUpQueue(daysWithoutTouch, maxItems)` and process the queue.
 
 Current-year monthly view:
